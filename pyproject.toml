@@ -1,0 +1,85 @@
+[tool.poetry]
+name = "spotcast"
+version = "0.0.0"
+description = "SpotCast"
+authors = [
+  "@fondberg",
+  "@fcusson"
+]
+license = "Apache 2.0"
+readme = "README.md"
+packages = [
+    { include = "custom_components/spotcast" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.13"
+pychromecast = "14.0.0"
+homeassistant = "^2024.2.5"
+spotipy = "^2.23.0"
+
+[tool.poetry.group.dev.dependencies]
+pylint = "3.0.3"
+ruff = "0.1.7"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+ignore = [
+  "ANN001",
+  "ANN003",
+  "ANN101",
+  "ANN401",
+  "ARG001",
+  "C901",
+  "COM812",
+  "COM819",
+  "D101",
+  "D102",
+  "D103",
+  "D107",
+  "D203",
+  "D206",
+  "D213",
+  "E501",
+  "EM101",
+  "ISC001",
+  "PLR0913",
+  "PLR0915",
+  "PLR2004",
+  "Q000",
+  "Q001",
+  "Q002",
+  "Q003",
+  "RUF012",
+  "S311",
+  "TID252",
+  "TRY003",
+  "W191",
+]
+select = ["ALL"]
+src = ["custom_components/spotcast"]
+
+[tool.ruff.flake8-import-conventions.extend-aliases]
+"homeassistant.helpers.config_validation" = "cv"
+voluptuous = "vol"
+
+[tool.ruff.isort]
+force-sort-within-sections = true
+known-first-party = [
+    "homeassistant",
+]
+combine-as-imports = true
+
+[tool.pylint."MESSAGES CONTROL"]
+# Reasons disabled:
+# format - handled by ruff
+# duplicate-code - unavoidable
+# used-before-assignment - false positives with TYPE_CHECKING structures
+disable = [
+  "format",
+  "duplicate-code",
+  "used-before-assignment",
+]

@@ -1,14 +1,5 @@
-#Links for local development
-/__init__.py
-/spotify_token.py
-/manifest.json
-/reuse.py
-/sensor.py
-/spotcast_controller.py
-/spotify_controller.py
-/helpers.py
-/const.py
-/services.yaml
+# IDEs
+.idea
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-__version__ = "3.7.1"
-
 import logging
 import time
 
@@ -129,7 +127,7 @@ def setup(hass: HomeAssistant, config) -> bool:
         hass.async_add_job(get_player())
 
     @callback
-    def websocket_handle_accounts(hass: HomeAssistant, connection, msg) -> None:  # noqa: ARG001
+    def websocket_handle_accounts(hass: HomeAssistant, connection, msg) -> None:
         """Handle to get accounts."""
         _LOGGER.debug("websocket_handle_accounts msg: %s", msg)
         resp = list(accounts.keys()) if accounts is not None else []
