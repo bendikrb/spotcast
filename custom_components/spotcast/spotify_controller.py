@@ -1,18 +1,22 @@
-"""
-Controller to interface with Spotify.
-"""
+"""Controller to interface with Spotify."""
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import threading
+import warnings
+from typing import TYPE_CHECKING
+
 import requests
-import json
-import hashlib
+from pychromecast.controllers import BaseController
 
 from .const import APP_SPOTIFY
+from .error import LaunchError
 
-from pychromecast.controllers import BaseController
-from pychromecast.error import LaunchError
+if TYPE_CHECKING:
+    from pychromecast import Chromecast
+    from pychromecast.controllers import CastMessage
 
 APP_NAMESPACE = "urn:x-cast:com.spotify.chromecast.secure.v1"
 TYPE_GET_INFO = "getInfo"
@@ -21,15 +25,22 @@ TYPE_ADD_USER = "addUser"
 TYPE_ADD_USER_RESPONSE = "addUserResponse"
 TYPE_ADD_USER_ERROR = "addUserError"
 
+_LOGGER = logging.getLogger(__name__)
+
 
 # pylint: disable=too-many-instance-attributes
 class SpotifyController(BaseController):
     """Controller to interact with Spotify namespace."""
 
-    def __init__(self, castDevice, access_token=None, expires=None):
-        super(SpotifyController, self).__init__(APP_NAMESPACE, APP_SPOTIFY)
+    def __init__(
+        self,
+        cast_device: Chromecast,
+        access_token: str | None = None,
+        expires: int | None = None,
+    ) -> None:
+        super().__init__(APP_NAMESPACE, APP_SPOTIFY)
 
-        self.logger = logging.getLogger(__name__)
+        self.client = None
         self.session_started = False
         self.access_token = access_token
         self.expires = expires
@@ -37,11 +48,10 @@ class SpotifyController(BaseController):
         self.device = None
         self.credential_error = False
         self.waiting = threading.Event()
-        self.castDevice = castDevice
+        self.cast_device = cast_device
 
-    def receive_message(self, _message, data: dict):
-        """
-        Handle the auth flow and active player selection.
+    def receive_message(self, _message: CastMessage, data: dict) -> bool:
+        """Handle the auth flow and active player selection.
 
         Called when a message is received.
         """
@@ -50,19 +60,24 @@ class SpotifyController(BaseController):
             self.client = data["payload"]["clientID"]
             headers = {
                 'authority': 'spclient.wg.spotify.com',
-                'authorization': 'Bearer {}'.format(self.access_token),
-                'content-type': 'text/plain;charset=UTF-8'
+                'authorization': f'Bearer {self.access_token}',
+                'content-type': 'text/plain;charset=UTF-8',
             }
 
             request_body = json.dumps({'clientId': self.client, 'deviceId': self.device})
 
-            response = requests.post('https://spclient.wg.spotify.com/device-auth/v1/refresh', headers=headers, data=request_body)
+            response = requests.post(
+                'https://spclient.wg.spotify.com/device-auth/v1/refresh',
+                headers=headers,
+                data=request_body,
+                timeout=10,
+            )
             json_resp = response.json()
             self.send_message({
                 "type": TYPE_ADD_USER,
                 "payload": {
                     "blob": json_resp["accessToken"],
-                    "tokenType": "accesstoken"
+                    "tokenType": "accesstoken",
                 }
             })
         if data["type"] == TYPE_ADD_USER_RESPONSE:
@@ -75,24 +90,21 @@ class SpotifyController(BaseController):
             self.waiting.set()
         return True
 
-    def launch_app(self, timeout=10):
-        """
-        Launch Spotify application.
+    def launch_app(self, timeout: int = 10) -> None:
+        """Launch Spotify application.
 
         Will raise a LaunchError exception if there is no response from the
         Spotify app within timeout seconds.
         """
-
         if self.access_token is None or self.expires is None:
             raise ValueError("access_token and expires cannot be empty")
 
-        def callback():
-            """Callback function"""
+        def callback() -> None:
             self.send_message({"type": TYPE_GET_INFO, "payload": {
-                "remoteName": self.castDevice.cast_info.friendly_name,
+                "remoteName": self.cast_device.cast_info.friendly_name,
                 "deviceID": self.getSpotifyDeviceID(),
                 "deviceAPI_isGroup": False,
-            },})
+            }})
 
         self.device = None
         self.credential_error = False
@@ -112,9 +124,9 @@ class SpotifyController(BaseController):
             )
 
     # pylint: disable=too-many-locals
-    def quick_play(self, **kwargs):
-        """
-        Launches the spotify controller and returns when it's ready.
+    def quick_play(self, **kwargs) -> None:
+        """Launch the spotify controller and returns when it's ready.
+
         To actually play media, another application using spotify connect is required.
         """
         self.access_token = kwargs["access_token"]
@@ -122,8 +134,19 @@ class SpotifyController(BaseController):
 
         self.launch_app(timeout=20)
 
-    def getSpotifyDeviceID(self) -> str:
-        """
-        Retrieve the Spotify deviceID from provided chromecast info
-        """
-        return hashlib.md5(self.castDevice.cast_info.friendly_name.encode()).hexdigest()
+    def getSpotifyDeviceID(self) -> str:  # noqa: N802
+        """Retrieve the Spotify deviceID from provided chromecast info."""
+        self.logger.info(
+            "Usage of SpotifyController.getSpotifyDeviceID() is deprecated and will be removed in a future release."
+            "Please use get_spotify_device_id instead."
+        )
+        warnings.warn(
+            "You should use `get_spotify_device_id(), ...,"
+            "additional_types=('track',))` instead",
+            DeprecationWarning,
+        )
+        return self.get_spotify_device_id()
+
+    def get_spotify_device_id(self) -> str:
+        """Retrieve the Spotify deviceID from provided chromecast info."""
+        return hashlib.md5(self.cast_device.cast_info.friendly_name.encode()).hexdigest()  # noqa: S324

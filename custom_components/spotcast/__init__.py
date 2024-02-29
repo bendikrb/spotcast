@@ -1,18 +1,15 @@
-"""main module for spotcast homeassistant utility"""
+"""Main module for spotcast homeassistant utility."""
 
 from __future__ import annotations
 
 __version__ = "3.7.1"
 
-import collections
 import logging
 import time
-import homeassistant
 
 from homeassistant.components import websocket_api
 from homeassistant.const import CONF_ENTITY_ID, CONF_OFFSET, CONF_REPEAT
-from homeassistant.core import callback
-import homeassistant.core as ha_core
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 
 from .const import (
     CONF_ACCOUNTS,
@@ -24,12 +21,12 @@ from .const import (
     CONF_SP_DC,
     CONF_SP_KEY,
     CONF_SPOTIFY_ACCOUNT,
-    CONF_SPOTIFY_DEVICE_ID,
-    CONF_SPOTIFY_URI,
-    CONF_SPOTIFY_SEARCH,
     CONF_SPOTIFY_CATEGORY,
     CONF_SPOTIFY_COUNTRY,
+    CONF_SPOTIFY_DEVICE_ID,
     CONF_SPOTIFY_LIMIT,
+    CONF_SPOTIFY_SEARCH,
+    CONF_SPOTIFY_URI,
     CONF_START_VOL,
     DOMAIN,
     SCHEMA_PLAYLISTS,
@@ -45,19 +42,17 @@ from .const import (
     WS_TYPE_SPOTCAST_PLAYER,
     WS_TYPE_SPOTCAST_PLAYLISTS,
 )
-
 from .helpers import (
     async_wrap,
     get_cast_devices,
+    get_random_playlist_from_category,
+    get_search_results,
     get_spotify_devices,
     get_spotify_install_status,
     get_spotify_media_player,
     is_empty_str,
-    get_random_playlist_from_category,
-    get_search_results,
     is_valid_uri,
 )
-
 from .spotcast_controller import SpotcastController
 
 CONFIG_SCHEMA = SPOTCAST_CONFIG_SCHEMA
@@ -65,19 +60,8 @@ CONFIG_SCHEMA = SPOTCAST_CONFIG_SCHEMA
 _LOGGER = logging.getLogger(__name__)
 
 
-def setup(hass: ha_core.HomeAssistant, config: collections.OrderedDict) -> bool:
-    """setup method for integration with Home Assistant
-
-    Args:
-        hass (ha_core.HomeAssistant): the HomeAssistant object of the
-            server
-        config (collections.OrderedDict): the configuration of the
-            server
-
-    Returns:
-        bool: returns a bollean based on if the setup wroked or not
-    """
-
+def setup(hass: HomeAssistant, config) -> bool:
+    """Set up integration with Home Assistant."""
     # get spotify core integration status
     # if return false, could indicate a bad spotify integration. Race
     # condition doesn't permit us to abort setup, see #258
@@ -94,17 +78,15 @@ def setup(hass: ha_core.HomeAssistant, config: collections.OrderedDict) -> bool:
     sp_key = conf[CONF_SP_KEY]
     accounts = conf.get(CONF_ACCOUNTS)
 
-    spotcast_controller = SpotcastController(hass, sp_dc, sp_key, accounts)
+    sc_controller = SpotcastController(hass, sp_dc, sp_key, accounts)
 
-    if DOMAIN not in hass.data:
-        hass.data[DOMAIN] = {}
-    hass.data[DOMAIN]["controller"] = spotcast_controller
+    hass.data.setdefault(DOMAIN, {})["controller"] = sc_controller
 
     @callback
-    def websocket_handle_playlists(hass: ha_core.HomeAssistant, connection, msg):
+    def websocket_handle_playlists(hass: HomeAssistant, connection, msg) -> None:
         @async_wrap
-        def get_playlist():
-            """Handle to get playlist"""
+        def get_playlist() -> None:
+            """Handle to get .playlist."""
             playlist_type = msg.get("playlist_type")
             country_code = msg.get("country_code")
             locale = msg.get("locale", "en")
@@ -112,7 +94,7 @@ def setup(hass: ha_core.HomeAssistant, config: collections.OrderedDict) -> bool:
             account = msg.get("account", None)
 
             _LOGGER.debug("websocket_handle_playlists msg: %s", msg)
-            resp = spotcast_controller.get_playlists(
+            resp = sc_controller.get_playlists(
                 account, playlist_type, country_code, locale, limit
             )
             connection.send_message(websocket_api.result_message(msg["id"], resp))
@@ -120,13 +102,13 @@ def setup(hass: ha_core.HomeAssistant, config: collections.OrderedDict) -> bool:
         hass.async_add_job(get_playlist())
 
     @callback
-    def websocket_handle_devices(hass: ha_core.HomeAssistant, connection, msg):
+    def websocket_handle_devices(hass: HomeAssistant, connection, msg) -> None:
         @async_wrap
-        def get_devices():
-            """Handle to get devices. Only for default account"""
+        def get_devices() -> None:
+            """Handle to get devices. Only for default account."""
             account = msg.get("account", None)
-            client = spotcast_controller.get_spotify_client(account)
-            me_resp = client._get("me")  # pylint: disable=W0212
+            client = sc_controller.get_spotify_client(account)
+            me_resp = client._get("me")  # pylint: disable=W0212  # noqa: SLF001
             spotify_media_player = get_spotify_media_player(hass, me_resp["id"])
             resp = get_spotify_devices(spotify_media_player)
             connection.send_message(websocket_api.result_message(msg["id"], resp))
@@ -134,29 +116,29 @@ def setup(hass: ha_core.HomeAssistant, config: collections.OrderedDict) -> bool:
         hass.async_add_job(get_devices())
 
     @callback
-    def websocket_handle_player(hass: ha_core.HomeAssistant, connection, msg):
+    def websocket_handle_player(hass: HomeAssistant, connection, msg) -> None:
         @async_wrap
-        def get_player():
-            """Handle to get player"""
+        def get_player() -> None:
+            """Handle to get player."""
             account = msg.get("account", None)
             _LOGGER.debug("websocket_handle_player msg: %s", msg)
-            client = spotcast_controller.get_spotify_client(account)
-            resp = client._get("me/player")  # pylint: disable=W0212
+            client = sc_controller.get_spotify_client(account)
+            resp = client._get("me/player")  # pylint: disable=W0212  # noqa: SLF001
             connection.send_message(websocket_api.result_message(msg["id"], resp))
 
         hass.async_add_job(get_player())
 
     @callback
-    def websocket_handle_accounts(hass: ha_core.HomeAssistant, connection, msg):  # pylint: disable=W0613
-        """Handle to get accounts"""
+    def websocket_handle_accounts(hass: HomeAssistant, connection, msg) -> None:  # noqa: ARG001
+        """Handle to get accounts."""
         _LOGGER.debug("websocket_handle_accounts msg: %s", msg)
         resp = list(accounts.keys()) if accounts is not None else []
         resp.append("default")
         connection.send_message(websocket_api.result_message(msg["id"], resp))
 
     @callback
-    def websocket_handle_castdevices(hass: ha_core.HomeAssistant, connection, msg):
-        """Handle to get cast devices for debug purposes"""
+    def websocket_handle_castdevices(hass: HomeAssistant, connection, msg) -> None:
+        """Handle to get cast devices for debug purposes."""
         _LOGGER.debug("websocket_handle_castdevices msg: %s", msg)
 
         known_devices = get_cast_devices(hass)
@@ -172,8 +154,8 @@ def setup(hass: ha_core.HomeAssistant, config: collections.OrderedDict) -> bool:
 
         connection.send_message(websocket_api.result_message(msg["id"], resp))
 
-    def start_casting(call: ha_core.ServiceCall):
-        """service called."""
+    def start_casting(call: ServiceCall) -> None:  # noqa: PLR0912
+        """Service called."""
         uri = call.data.get(CONF_SPOTIFY_URI)
         category = call.data.get(CONF_SPOTIFY_CATEGORY)
         country = call.data.get(CONF_SPOTIFY_COUNTRY)
@@ -198,7 +180,7 @@ def setup(hass: ha_core.HomeAssistant, config: collections.OrderedDict) -> bool:
             except KeyError:
                 country = None
 
-        client = spotcast_controller.get_spotify_client(account)
+        client = sc_controller.get_spotify_client(account)
 
         # verify the uri provided and clean-up if required
         if not is_empty_str(uri):
@@ -218,12 +200,12 @@ def setup(hass: ha_core.HomeAssistant, config: collections.OrderedDict) -> bool:
 
         # first, rely on spotify id given in config otherwise get one
         if not spotify_device_id:
-            spotify_device_id = spotcast_controller.get_spotify_device_id(
+            spotify_device_id = sc_controller.get_spotify_device_id(
                 account, spotify_device_id, device_name, entity_id
             )
 
         if is_empty_str(uri) and is_empty_str(search) and is_empty_str(category):
-            _LOGGER.debug("Transfering playback")
+            _LOGGER.debug("Transferring playback")
             current_playback = client.current_playback()
             if current_playback is not None:
                 _LOGGER.debug("Current_playback from spotify: %s", current_playback)
@@ -237,9 +219,9 @@ def setup(hass: ha_core.HomeAssistant, config: collections.OrderedDict) -> bool:
 
             if uri is None:
                 _LOGGER.error("No playlist returned. Stop service call")
-                return None
+                return
 
-            spotcast_controller.play(
+            sc_controller.play(
                 client,
                 spotify_device_id,
                 uri,
@@ -253,7 +235,7 @@ def setup(hass: ha_core.HomeAssistant, config: collections.OrderedDict) -> bool:
                 # get uri from search request
                 uri = get_search_results(search, client, country)
 
-            spotcast_controller.play(
+            sc_controller.play(
                 client,
                 spotify_device_id,
                 uri,

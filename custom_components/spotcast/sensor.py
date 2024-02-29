@@ -1,21 +1,22 @@
 """Sensor platform for Chromecast devices."""
 from __future__ import annotations
 
-import collections
+from datetime import timedelta
 import json
 import logging
-from datetime import timedelta
-import homeassistant.core as ha_core
+from typing import TYPE_CHECKING
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.const import STATE_OK, STATE_UNKNOWN
 from homeassistant.util import dt
 
+from .const import CONF_SPOTIFY_COUNTRY, DOMAIN
 from .helpers import get_cast_devices
-from .const import (
-    DOMAIN,
-    CONF_SPOTIFY_COUNTRY
-)
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,8 +24,7 @@ SENSOR_SCAN_INTERVAL_SECS = 60
 SCAN_INTERVAL = timedelta(seconds=SENSOR_SCAN_INTERVAL_SECS)
 
 
-def setup_platform(hass:ha_core.HomeAssistant, config:collections.OrderedDict, add_devices, discovery_info=None):
-
+def setup_platform(hass: HomeAssistant, config, add_devices, discovery_info=None) -> None:
     try:
         country = config[CONF_SPOTIFY_COUNTRY]
     except KeyError:
@@ -35,27 +35,27 @@ def setup_platform(hass:ha_core.HomeAssistant, config:collections.OrderedDict, a
 
 
 class ChromecastDevicesSensor(SensorEntity):
-    def __init__(self, hass):
+    def __init__(self, hass) -> None:
         self.hass = hass
         self._state = STATE_UNKNOWN
         self._chromecast_devices = []
-        self._attributes = {"devices_json": [], "devices": [], "last_update": None}
+        self._attributes = {"devices_json": "", "devices": [], "last_update": ""}
         _LOGGER.debug("initiating sensor")
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "Chromecast Devices"
 
     @property
-    def state(self):
+    def state(self):  # noqa: ANN201
         return self._state
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> Mapping[str, any] | None:
         """Return the state attributes."""
         return self._attributes
 
-    def update(self):
+    def update(self) -> None:
         _LOGGER.debug("Getting chromecast devices")
 
         known_devices = get_cast_devices(self.hass)
@@ -79,34 +79,31 @@ class ChromecastDevicesSensor(SensorEntity):
 
 
 class ChromecastPlaylistSensor(SensorEntity):
-    def __init__(self, hass: ha_core, country=None):
+    def __init__(self, hass: HomeAssistant, country=None) -> None:
         self.hass = hass
         self._state = STATE_UNKNOWN
         self.country = country
-        self._attributes = {"playlists": [], "last_update": None}
+        self._attributes = {"playlists": [], "last_update": ""}
         _LOGGER.debug("initiating playlist sensor")
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "Playlists sensor"
 
     @property
-    def state(self):
+    def state(self):  # noqa: ANN201
         return self._state
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> Mapping[str, any] | None:
         """Return the state attributes."""
         return self._attributes
 
-    def update(self):
+    def update(self) -> None:
         _LOGGER.debug("Getting playlists")
 
-        if self.country is not None:
-            country_code = self.country
-        else:
-            # kept the country code to SE if not provided by the user for retrocompatibility
-            country_code = "SE"
+        # set the country code to SE if not provided by the user for retro-compatibility
+        country_code = self.country if self.country is not None else "SE"
 
         playlist_type = "user"
         locale = "en"
@@ -116,7 +113,6 @@ class ChromecastPlaylistSensor(SensorEntity):
         resp = self.hass.data[DOMAIN]["controller"].get_playlists(
             account, playlist_type, country_code, locale, limit
         )
-        self._attributes["playlists"] = [{ "uri": x['uri'], "name": x['name']} for x in resp['items'] ]
-
+        self._attributes["playlists"] = [{"uri": x['uri'], "name": x['name']} for x in resp['items']]
         self._attributes["last_update"] = dt.now().isoformat("T")
         self._state = STATE_OK

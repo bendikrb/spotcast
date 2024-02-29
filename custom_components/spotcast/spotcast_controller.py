@@ -1,47 +1,45 @@
 from __future__ import annotations
 
 import collections
+import json
 import logging
 import random
 import time
 from asyncio import run_coroutine_threadsafe
-from requests import TooManyRedirects
 from collections import OrderedDict
-from datetime import datetime
-import homeassistant.core as ha_core
+from typing import TYPE_CHECKING
 
-import pychromecast
 import aiohttp
-import json
+import pychromecast
 import spotipy
 from homeassistant.components.cast.helpers import ChromeCastZeroconf
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import dt as dt_util
+from requests import TooManyRedirects
 
+from .const import CONF_SP_DC, CONF_SP_KEY, USER_AGENT
+from .error import TokenError
+from .helpers import get_cast_devices, get_spotify_devices, get_spotify_media_player
 from .spotify_controller import SpotifyController
-from .const import CONF_SP_DC, CONF_SP_KEY
-from .helpers import (
-    get_cast_devices,
-    get_spotify_devices,
-    get_spotify_media_player
-)
+
+if TYPE_CHECKING:
+    from pychromecast import Chromecast
+
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class TokenError(Exception):
-    pass
 
 
 class SpotifyCastDevice:
     """Represents a spotify device."""
 
     hass = None
-    castDevice = None
-    spotifyController = None
+    cast_device = None
+    spotify_controller = None
 
     def __init__(
         self,
-        hass: ha_core.HomeAssistant,
+        hass: HomeAssistant,
         call_device_name: str,
         call_entity_id: str
     ) -> None:
@@ -68,12 +66,12 @@ class SpotifyCastDevice:
             raise HomeAssistantError("device_name is empty")
 
         # Find chromecast device
-        self.castDevice = self.get_chromecast_device(device_name)
-        _LOGGER.debug("Found cast device: %s", self.castDevice)
-        self.castDevice.wait()
+        self.cast_device = self.get_chromecast_device(device_name)
+        _LOGGER.debug("Found cast device: %s", self.cast_device)
+        self.cast_device.wait()
 
-    def get_chromecast_device(self, device_name: str) -> None:
-        # Get cast from discovered devices of cast platform
+    def get_chromecast_device(self, device_name: str) -> Chromecast:
+        """Get cast from discovered devices of cast platform."""
         known_devices = get_cast_devices(self.hass)
 
         _LOGGER.debug("Chromecast devices: %s", known_devices)
@@ -94,13 +92,12 @@ class SpotifyCastDevice:
             "Could not find device %s from hass.data",
             device_name,
         )
-        raise HomeAssistantError(
-            "Could not find device with name {}".format(device_name)
-        )
+        raise HomeAssistantError("Could not find device with name %s", device_name)
 
-    def start_spotify_controller(self, access_token: str, expires: int):
-        sp = SpotifyController(self.castDevice, access_token, expires)
-        self.castDevice.register_handler(sp)
+    def start_spotify_controller(self, access_token: str, expires: int) -> None:
+        """Start spotify controller."""
+        sp = SpotifyController(self.cast_device, access_token, expires)
+        self.cast_device.register_handler(sp)
         sp.launch_app()
 
         if not sp.is_launched and not sp.credential_error:
@@ -112,35 +109,29 @@ class SpotifyCastDevice:
                 "Failed to launch spotify controller due to credentials error"
             )
 
-        self.spotifyController = sp
+        self.spotify_controller = sp
 
-    def get_spotify_device_id(self, user_id) -> None:
+    def get_spotify_device_id(self, user_id) -> str:
         spotify_media_player = get_spotify_media_player(self.hass, user_id)
         max_retries = 5
         counter = 0
         devices_available = None
-        _LOGGER.debug("Searching for Spotify device: {}".format(
-            self.spotifyController.device))
+        _LOGGER.debug("Searching for Spotify device: %s", self.spotify_controller.device)
         while counter < max_retries:
             devices_available = get_spotify_devices(spotify_media_player)
             # Look for device to make sure we can start playback
             if devices := devices_available["devices"]:
                 for device in devices:
-                    if device["id"] == self.spotifyController.device:
-                        _LOGGER.debug(
-                            "Found matching Spotify device: {}".format(device))
+                    if device["id"] == self.spotify_controller.device:
+                        _LOGGER.debug("Found matching Spotify device: %s", device)
                         return device["id"]
 
             sleep = random.uniform(1.5, 1.8) ** counter
             time.sleep(sleep)
             counter = counter + 1
 
-        _LOGGER.error(
-            'No device with id "{}" known by Spotify'.format(
-                self.spotifyController.device
-            )
-        )
-        _LOGGER.error("Known devices: {}".format(devices_available["devices"]))
+        _LOGGER.error('No device with id "%s" known by Spotify', self.spotify_controller.device)
+        _LOGGER.error("Known devices: %s", devices_available["devices"])
 
         raise HomeAssistantError("Failed to get device id from Spotify")
 
@@ -154,14 +145,14 @@ class SpotifyToken:
     _access_token = None
     _token_expires = 0
 
-    def __init__(self, hass: ha_core.HomeAssistant, sp_dc: str, sp_key: str):
+    def __init__(self, hass: HomeAssistant, sp_dc: str, sp_key: str) -> None:
         self.hass = hass
         self.sp_dc = sp_dc
         self.sp_key = sp_key
 
-    def ensure_token_valid(self) -> bool:
+    def ensure_token_valid(self) -> None:
         if float(self._token_expires) > time.time():
-            return True
+            return
         self.get_spotify_token()
 
     @property
@@ -176,39 +167,34 @@ class SpotifyToken:
                 self.start_session(), self.hass.loop
             ).result()
             expires = self._token_expires - int(time.time())
-            return self._access_token, expires
-        except TooManyRedirects:
-            _LOGGER.error(
+
+            return self._access_token, expires  # noqa: TRY300
+        except TooManyRedirects as ex:
+            _LOGGER.exception(
                 "Could not get spotify token. sp_dc and sp_key could be "
                 "expired. Please update in config."
             )
-            raise HomeAssistantError("Expired sp_dc, sp_key")
-        except (TokenError, Exception):  # noqa: E722
-            raise HomeAssistantError("Could not get spotify token.")
+            raise HomeAssistantError("Expired sp_dc, sp_key") from ex
+        except (TokenError, Exception) as ex:
+            raise HomeAssistantError("Could not get spotify token.") from ex
 
-    async def start_session(self):
-        """ Starts session to get access token. """
+    async def start_session(self) -> tuple[str, int]:
+        """Start session to get access token."""
         cookies = {'sp_dc': self.sp_dc, 'sp_key': self.sp_key}
 
         async with aiohttp.ClientSession(cookies=cookies) as session:
 
             headers = {
-                'user-agent': (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 "
-                    "Safari/537.36"
-                )
+                'user-agent': USER_AGENT,
             }
 
             async with session.get(
-                (
-                    'https://open.spotify.com/get_access_token?reason='
-                    'transport&productType=web_player'
-                ),
+                'https://open.spotify.com/get_access_token?reason=transport&productType=web_player',
                 allow_redirects=False,
                 headers=headers
             ) as response:
-                if (response.status == 302 and response.headers['Location'] == '/get_access_token?reason=transport&productType=web_player&_authfailed=1'):
+                if response.status == 302 and response.headers[
+                    'Location'] == '/get_access_token?reason=transport&productType=web_player&_authfailed=1':
                     _LOGGER.error(
                         "Unsuccessful token request, received code 302 and "
                         "Location header %s. sp_dc and sp_key could be "
@@ -216,12 +202,12 @@ class SpotifyToken:
                         response.headers['Location']
                     )
                     raise HomeAssistantError("Expired sp_dc, sp_key")
-                if (response.status != 200):
+                if response.status != 200:
                     _LOGGER.info(
                         "Unsuccessful token request, received code %i",
                         response.status
                     )
-                    raise TokenError()
+                    raise TokenError
 
                 data = await response.text()
 
@@ -235,13 +221,13 @@ class SpotifyToken:
 
 class SpotcastController:
 
-    spotifyTokenInstances = {}
+    spotify_token_instances = {}
     accounts: dict = {}
     hass = None
 
     def __init__(
         self,
-        hass: ha_core.HomeAssistant,
+        hass: HomeAssistant,
         sp_dc: str,
         sp_key: str,
         accs: collections.OrderedDict
@@ -252,27 +238,27 @@ class SpotcastController:
             [("sp_dc", sp_dc), ("sp_key", sp_key)])
         self.hass = hass
 
-    def get_token_instance(self, account: str = None) -> any:
-        """Get token instance for account"""
+    def get_token_instance(self, account: str | None = None) -> any:
+        """Get token instance for account."""
         if account is None:
             account = "default"
         dc = self.accounts.get(account).get(CONF_SP_DC)
         key = self.accounts.get(account).get(CONF_SP_KEY)
 
         _LOGGER.debug("setting up with  account %s", account)
-        if account not in self.spotifyTokenInstances:
-            self.spotifyTokenInstances[account] = SpotifyToken(
+        if account not in self.spotify_token_instances:
+            self.spotify_token_instances[account] = SpotifyToken(
                 self.hass, dc, key)
-        return self.spotifyTokenInstances[account]
+        return self.spotify_token_instances[account]
 
     def get_spotify_client(self, account: str) -> spotipy.Spotify:
         return spotipy.Spotify(
             auth=self.get_token_instance(account).access_token
         )
 
-    def _getSpotifyConnectDeviceId(self, client, device_name):
+    def _get_spotify_connect_device_id(self, client, device_name) -> str | None:
         media_player = get_spotify_media_player(
-            self.hass, client._get("me")["id"])
+            self.hass, client._get("me")["id"])  # noqa: SLF001
         devices_available = get_spotify_devices(media_player)
         for device in devices_available["devices"]:
             if device["name"] == device_name:
@@ -280,23 +266,21 @@ class SpotcastController:
         return None
 
     def get_spotify_device_id(
-            self,
-            account,
-            spotify_device_id,
-            device_name,
-            entity_id
-    ):
+        self,
+        account,
+        spotify_device_id,
+        device_name,
+        entity_id,
+    ) -> str:
         # login as real browser to get powerful token
-        access_token, expires = self.get_token_instance(
-            account).get_spotify_token()
+        access_token, expires = self.get_token_instance(account).get_spotify_token()
         # get the spotify web api client
         client = spotipy.Spotify(auth=access_token)
         # first, rely on spotify id given in config
         if not spotify_device_id:
             # if not present, check if there's a spotify connect device
             # with that name
-            spotify_device_id = self._getSpotifyConnectDeviceId(
-                client, device_name)
+            spotify_device_id = self._get_spotify_connect_device_id(client, device_name)
         if not spotify_device_id:
             # if still no id available, check cast devices and launch
             # the app on chromecast
@@ -305,14 +289,13 @@ class SpotcastController:
                 device_name,
                 entity_id,
             )
-            me_resp = client._get("me")
+            me_resp = client._get("me")  # noqa: SLF001
             spotify_cast_device.start_spotify_controller(access_token, expires)
             # Make sure it is started
-            spotify_device_id = spotify_cast_device.get_spotify_device_id(
-                me_resp["id"])
+            spotify_device_id = spotify_cast_device.get_spotify_device_id(me_resp["id"])
         return spotify_device_id
 
-    def play(
+    def play(  # noqa: C901, PLR0912
         self,
         client: spotipy.Spotify,
         spotify_device_id: str,
@@ -320,13 +303,9 @@ class SpotcastController:
         random_song: bool,
         position: str,
         ignore_fully_played: str,
-        country_code: str = None
+        country_code: str | None = None
     ) -> None:
-        _LOGGER.debug(
-            "Playing URI: %s on device-id: %s",
-            uri,
-            spotify_device_id,
-        )
+        _LOGGER.debug("Playing URI: %s on device-id: %s", uri, spotify_device_id)
 
         if uri.find("show") > 0:
             show_episodes_info = client.show_episodes(uri, market=country_code)
@@ -337,17 +316,12 @@ class SpotcastController:
                             episode_uri = episode["external_urls"]["spotify"]
                             break
                 else:
-                    episode_uri = show_episodes_info["items"][0][
-                        "external_urls"]["spotify"]
+                    episode_uri = show_episodes_info["items"][0]["external_urls"]["spotify"]
                 _LOGGER.debug(
-                    (
-                        "Playing episode using uris (latest podcast playlist)="
-                        " for uri: %s"
-                    ),
+                    "Playing episode using uris (latest podcast playlist) for uri: %s",
                     episode_uri,
                 )
-                client.start_playback(
-                    device_id=spotify_device_id, uris=[episode_uri])
+                client.start_playback(device_id=spotify_device_id, uris=[episode_uri])
         elif uri.find("episode") > 0:
             _LOGGER.debug("Playing episode using uris= for uri: %s", uri)
             client.start_playback(device_id=spotify_device_id, uris=[uri])
@@ -357,14 +331,10 @@ class SpotcastController:
             client.start_playback(device_id=spotify_device_id, uris=[uri])
         else:
             if uri == "random":
-                _LOGGER.debug(
-                    "Cool, you found the easter egg with playing a random"
-                    " playlist"
-                )
+                _LOGGER.debug("Playing a random playlist")
                 playlists = client.user_playlists("me", 50)
                 no_playlists = len(playlists["items"])
-                uri = playlists["items"][random.randint(
-                    0, no_playlists - 1)]["uri"]
+                uri = playlists["items"][random.randint(0, no_playlists - 1)]["uri"]
             kwargs = {"device_id": spotify_device_id, "context_uri": uri}
 
             if random_song:
@@ -372,20 +342,16 @@ class SpotcastController:
                     results = client.album_tracks(uri, market=country_code)
                     position = random.randint(0, results["total"] - 1)
                 elif uri.find("playlist") > 0:
-                    results = client.playlist_tracks(uri)
+                    results = client.playlist_items(uri, additional_types=('track',))
                     position = random.randint(0, results["total"] - 1)
                 elif uri.find("collection") > 0:
                     results = client.current_user_saved_tracks()
                     position = random.randint(0, results["total"] - 1)
-                _LOGGER.debug(
-                    "Start playback at random position: %s", position)
+                _LOGGER.debug("Start playback at random position: %s", position)
             if uri.find("artist") < 1:
                 kwargs["offset"] = {"position": position}
             _LOGGER.debug(
-                (
-                    'Playing context uri using context_uri for uri: "%s" '
-                    '(random_song: %s)'
-                ),
+                'Playing context uri using context_uri for uri: "%s" (random_song: %s)',
                 uri,
                 random_song,
             )
@@ -397,7 +363,7 @@ class SpotcastController:
         playlist_type: str,
         country_code: str,
         locale: str,
-        limit: int
+        limit: int,
     ) -> dict:
         client = self.get_spotify_client(account)
         resp = {}
@@ -405,24 +371,20 @@ class SpotcastController:
         if playlist_type == "discover-weekly":
             playlist_type = "made-for-x"
 
-        if (
-            playlist_type == "user"
-            or playlist_type == "default"
-            or playlist_type == ""
-        ):
+        if playlist_type in ("user", "default", ""):
             resp = client.current_user_playlists(limit=limit)
 
         elif playlist_type == "featured":
             resp = client.featured_playlists(
                 locale=locale,
                 country=country_code,
-                timestamp=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                timestamp=dt_util.now().strftime("%Y-%m-%dT%H:%M:%S"),
                 limit=limit,
                 offset=0,
             )
             resp = resp.get("playlists")
         else:
-            resp = client._get(
+            resp = client._get(  # noqa: SLF001
                 "views/" + playlist_type,
                 content_limit=limit,
                 locale=locale,

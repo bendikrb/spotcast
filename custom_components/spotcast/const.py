@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
+
 from homeassistant.components import websocket_api
 from homeassistant.const import CONF_ENTITY_ID, CONF_OFFSET, CONF_REPEAT
+import homeassistant.helpers.config_validation as cv
 
 APP_SPOTIFY = "CC32E753"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36"
 
 DOMAIN = "spotcast"
 
