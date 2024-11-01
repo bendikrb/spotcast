@@ -7,6 +7,7 @@ import random
 import time
 from asyncio import run_coroutine_threadsafe
 from collections import OrderedDict
+from dataclasses import is_dataclass
 from datetime import datetime
 
 import aiohttp
@@ -121,11 +122,12 @@ class SpotifyCastDevice:
             # Look for device to make sure we can start playback
             if devices := devices_available["devices"]:
                 for device in devices:
-                    if device["id"] == self.spotifyController.device:
+                    device_id = device.device_id if is_dataclass(device) else device["id"]
+                    if device_id == self.spotifyController.device:
                         _LOGGER.debug(
                             "Found matching Spotify device: {}".format(device)
                         )
-                        return device["id"]
+                        return device_id
 
             sleep = random.uniform(1.5, 1.8) ** counter
             time.sleep(sleep)
@@ -275,8 +277,9 @@ class SpotcastController:
             self.hass, client._get("me")["id"])
         devices_available = get_spotify_devices(media_player, self.hass)
         for device in devices_available["devices"]:
-            if device["name"] == device_name:
-                return device["id"]
+            name = device.name if is_dataclass(device) else device["name"]
+            if name == device_name:
+                return device.device_id if is_dataclass(device) else device["id"]
         return None
 
     def get_spotify_device_id(self, account, spotify_device_id, device_name, entity_id):
